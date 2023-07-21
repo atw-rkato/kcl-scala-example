@@ -1,0 +1,35 @@
+version: "3.9"
+
+services:
+  dynamodb-local:
+    image: amazon/dynamodb-local:2.0.0
+    user: root
+    command: -jar DynamoDBLocal.jar -sharedDb -dbPath /data -port 49000
+    volumes:
+      - dynamodb-local-data:/data
+    ports:
+      - "49000:49000"
+  dynamodb-admin:
+    image: aaronshaf/dynamodb-admin:4.6.1
+    ports:
+      - "49001:49001"
+    depends_on:
+      - dynamodb-local
+    environment:
+      DYNAMO_ENDPOINT: http://dynamodb-local:49000
+      PORT: 49001
+  localstack:
+    container_name: "${LOCALSTACK_DOCKER_NAME-localstack_main}"
+    image: localstack/localstack
+    ports:
+      - "127.0.0.1:4566:4566"            # LocalStack Gateway
+      - "127.0.0.1:4510-4559:4510-4559"  # external services port range
+    environment:
+      - DEBUG=${DEBUG-}
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - "${LOCALSTACK_VOLUME_DIR:-./volume}:/var/lib/localstack"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+
+volumes:
+  dynamodb-local-data:
