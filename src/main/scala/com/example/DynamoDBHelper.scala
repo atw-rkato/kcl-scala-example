@@ -24,7 +24,7 @@ class DynamoDBHelper(client: AmazonDynamoDB) {
 
   def setUpTable(): String = {
     val attributeDefinitions = Vector(
-      new AttributeDefinition("Id", ScalarAttributeType.N),
+      new AttributeDefinition("Id", ScalarAttributeType.N)
     )
     val keySchema = Vector(
       new KeySchemaElement("Id", KeyType.HASH)

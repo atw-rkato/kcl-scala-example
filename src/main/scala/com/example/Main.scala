@@ -24,17 +24,20 @@ import com.amazonaws.services.kinesis.clientlibrary.lib.worker.{
 }
 
 import java.io.{BufferedReader, IOException, InputStreamReader}
-import java.time.Duration
-import java.util.{Locale, UUID}
+import java.util.UUID
 import java.util.concurrent.{ExecutionException, TimeUnit, TimeoutException}
+import scala.concurrent.duration.{Duration, DurationInt}
+import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.util.{Failure, Success}
+
 object Main {
   def main(args: Array[String]): Unit = {
-    Locale.setDefault(Locale.US)
+    implicit val ec: ExecutionContext = ExecutionContext.global
     val credentialsProvider = new AWSStaticCredentialsProvider(
       new BasicAWSCredentials("dummyKey", "dummySecret")
     )
     val runner = KclSample.init(credentialsProvider)
-    runner.run()
+    Await.result(runner.run(), Duration.Inf)
   }
 }
 
@@ -57,7 +60,7 @@ object KclSample {
       .build()
     val dynamoDBHelper = new DynamoDBHelper(dynamoDBClient)
 
-    val streamName: String = dynamoDBHelper.setUpTable()
+    val streamName = dynamoDBHelper.setUpTable()
 
     val cloudWatchClient = AmazonCloudWatchClientBuilder
       .standard()
@@ -88,7 +91,7 @@ object KclSample {
       streamName,
       null,
       DYNAMODB_ENDPOINT,
-      InitialPositionInStream.LATEST,
+      InitialPositionInStream.TRIM_HORIZON,
       credentialsProvider,
       credentialsProvider,
       credentialsProvider,
@@ -111,9 +114,9 @@ object KclSample {
       KinesisClientLibConfiguration.DEFAULT_SHUTDOWN_GRACE_MILLIS,
       KinesisClientLibConfiguration.DEFAULT_DDB_BILLING_MODE,
       new SimpleRecordsFetcherFactory,
-      Duration.ofMinutes(1).toMillis,
-      Duration.ofMinutes(5).toMillis,
-      Duration.ofMinutes(30).toMillis
+      1.minutes.toMillis,
+      5.minutes.toMillis,
+      30.minutes.toMillis
     )
 
     val worker = StreamsWorkerFactory.createDynamoDbStreamsWorker(
@@ -129,8 +132,7 @@ object KclSample {
 }
 class KclSample private (private val worker: Worker) {
 
-  def run(): Unit = {
-
+  def run()(implicit ec: ExecutionContext): Future[Unit] = {
     val schedulerThread = new Thread(worker)
     schedulerThread.setDaemon(true)
     schedulerThread.start()
@@ -145,22 +147,26 @@ class KclSample private (private val worker: Worker) {
         )
     }
 
-    val gracefulShutdownFuture =
-      worker.startGracefulShutdown
+    val gracefulShutdownFuture = worker.startGracefulShutdown
     println("Waiting up to 20 seconds for shutdown to complete.")
-    try gracefulShutdownFuture.get(20, TimeUnit.SECONDS)
-    catch {
-      case _: InterruptedException =>
-        println(
-          "Interrupted while waiting for graceful shutdown. Continuing."
-        )
-      case e: ExecutionException =>
-        println(s"Exception while executing graceful shutdown. ${e}")
-      case _: TimeoutException =>
-        println(
-          "Timeout while waiting for shutdown.  Scheduler may not have exited."
-        )
+    Future(gracefulShutdownFuture.get(20, TimeUnit.SECONDS)).transform {
+      case Success(_) =>
+        println("Completed, shutting down now.")
+        Success(())
+      case Failure(e) =>
+        e match {
+          case _: InterruptedException =>
+            println(
+              "Interrupted while waiting for graceful shutdown. Continuing."
+            )
+          case e: ExecutionException =>
+            println(s"Exception while executing graceful shutdown. ${e}")
+          case _: TimeoutException =>
+            println(
+              "Timeout while waiting for shutdown.  Worker may not have exited."
+            )
+        }
+        Failure(e)
     }
-    println("Completed, shutting down now.")
   }
 }

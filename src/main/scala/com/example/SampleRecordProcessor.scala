@@ -1,8 +1,15 @@
 package com.example
 
-import com.amazonaws.services.kinesis.clientlibrary.exceptions.{InvalidStateException, ShutdownException}
+import com.amazonaws.services.kinesis.clientlibrary.exceptions.{
+  InvalidStateException,
+  ShutdownException
+}
 import com.amazonaws.services.kinesis.clientlibrary.interfaces.v2.IRecordProcessor
-import com.amazonaws.services.kinesis.clientlibrary.types.{InitializationInput, ProcessRecordsInput, ShutdownInput}
+import com.amazonaws.services.kinesis.clientlibrary.types.{
+  InitializationInput,
+  ProcessRecordsInput,
+  ShutdownInput
+}
 import io.circe.{Json, parser}
 
 import java.nio.charset.StandardCharsets
