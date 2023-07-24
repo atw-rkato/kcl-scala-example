@@ -8,8 +8,9 @@ lazy val root = (project in file("."))
   .settings(name := "kcl2-consumer-scala-example")
 
 libraryDependencies ++= Seq(
-  "software.amazon.awssdk" % "dynamodb" % "2.20.107",
-  "software.amazon.kinesis" % "amazon-kinesis-client" % "2.5.1",
+  "com.amazonaws" % "aws-java-sdk-dynamodb" % "1.12.512",
+  "com.amazonaws" % "amazon-kinesis-client" % "1.15.0",
+  "com.amazonaws" % "dynamodb-streams-kinesis-adapter" % "1.6.0",
   "com.typesafe.scala-logging" %% "scala-logging" % "3.9.5",
   "ch.qos.logback" % "logback-classic" % "1.4.8"
 )
