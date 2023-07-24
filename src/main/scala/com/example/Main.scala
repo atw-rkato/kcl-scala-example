@@ -1,3 +1,5 @@
+package com.example
+
 import com.amazonaws.ClientConfiguration
 import com.amazonaws.auth.{
   AWSCredentialsProvider,
@@ -5,22 +7,29 @@ import com.amazonaws.auth.{
   BasicAWSCredentials
 }
 import com.amazonaws.client.builder.AwsClientBuilder
-import com.amazonaws.services.dynamodbv2.AmazonDynamoDBClientBuilder
-import com.amazonaws.services.dynamodbv2.model.DescribeTableRequest
+import com.amazonaws.services.cloudwatch.AmazonCloudWatchClientBuilder
+import com.amazonaws.services.dynamodbv2.streamsadapter.{
+  AmazonDynamoDBStreamsAdapterClient,
+  StreamsWorkerFactory
+}
+import com.amazonaws.services.dynamodbv2.{
+  AmazonDynamoDBClientBuilder,
+  AmazonDynamoDBStreamsClientBuilder
+}
 import com.amazonaws.services.kinesis.clientlibrary.lib.worker.{
+  InitialPositionInStream,
   KinesisClientLibConfiguration,
   SimpleRecordsFetcherFactory,
   Worker
 }
-import com.typesafe.scalalogging.LazyLogging
 
 import java.io.{BufferedReader, IOException, InputStreamReader}
 import java.time.Duration
-import java.util.UUID
+import java.util.{Locale, UUID}
 import java.util.concurrent.{ExecutionException, TimeUnit, TimeoutException}
-
 object Main {
   def main(args: Array[String]): Unit = {
+    Locale.setDefault(Locale.US)
     val credentialsProvider = new AWSStaticCredentialsProvider(
       new BasicAWSCredentials("dummyKey", "dummySecret")
     )
@@ -29,21 +38,57 @@ object Main {
   }
 }
 
-object KclSample extends LazyLogging {
-  private val TABLE_NAME = "sample-table"
-  private val APP_NAME = "kcl2-consumer-scala-example"
-  private val DYNAMODB_ENDPOINT = "http://localhost:49000"
-  private val REGION = "ap-northeast-1"
+object KclSample {
+  private final val APP_NAME = "kcl2-consumer-scala-example"
+  private final val DYNAMODB_ENDPOINT = "http://localhost:49000"
+  private final val CLOUD_WATCH_ENDPOINT = "http://localhost:4566"
+  private final val REGION = "ap-northeast-1"
 
   def init(credentialsProvider: AWSCredentialsProvider): KclSample = {
-    val streamName: String = getTargetStreamArn(credentialsProvider)
+    val dynamoDBClient = AmazonDynamoDBClientBuilder
+      .standard()
+      .withEndpointConfiguration(
+        new AwsClientBuilder.EndpointConfiguration(
+          DYNAMODB_ENDPOINT,
+          REGION
+        )
+      )
+      .withCredentials(credentialsProvider)
+      .build()
+    val dynamoDBHelper = new DynamoDBHelper(dynamoDBClient)
 
-    val config = new KinesisClientLibConfiguration(
+    val streamName: String = dynamoDBHelper.setUpTable()
+
+    val cloudWatchClient = AmazonCloudWatchClientBuilder
+      .standard()
+      .withEndpointConfiguration(
+        new AwsClientBuilder.EndpointConfiguration(
+          CLOUD_WATCH_ENDPOINT,
+          REGION
+        )
+      )
+      .withCredentials(credentialsProvider)
+      .build()
+
+    val adapterClient = new AmazonDynamoDBStreamsAdapterClient(
+      AmazonDynamoDBStreamsClientBuilder
+        .standard()
+        .withEndpointConfiguration(
+          new AwsClientBuilder.EndpointConfiguration(
+            DYNAMODB_ENDPOINT,
+            REGION
+          )
+        )
+        .withCredentials(credentialsProvider)
+        .build()
+    )
+
+    val workerConfig = new KinesisClientLibConfiguration(
       APP_NAME,
       streamName,
       null,
       DYNAMODB_ENDPOINT,
-      KinesisClientLibConfiguration.DEFAULT_INITIAL_POSITION_IN_STREAM,
+      InitialPositionInStream.LATEST,
       credentialsProvider,
       credentialsProvider,
       credentialsProvider,
@@ -71,82 +116,51 @@ object KclSample extends LazyLogging {
       Duration.ofMinutes(30).toMillis
     )
 
-    val worker = new Worker.Builder()
-      .recordProcessorFactory(() => new SampleRecordProcessor)
-      .config(config)
-      .build()
+    val worker = StreamsWorkerFactory.createDynamoDbStreamsWorker(
+      () => new SampleRecordProcessor,
+      workerConfig,
+      adapterClient,
+      dynamoDBClient,
+      cloudWatchClient
+    )
 
     new KclSample(worker)
   }
-
-  private def getTargetStreamArn(
-      credentialsProvider: AWSCredentialsProvider
-  ) = {
-    val dynamoClient = AmazonDynamoDBClientBuilder
-      .standard()
-      .withEndpointConfiguration(
-        new AwsClientBuilder.EndpointConfiguration(
-          DYNAMODB_ENDPOINT,
-          REGION
-        )
-      )
-      .withCredentials(credentialsProvider)
-      .build()
-
-    val tableDescription = dynamoClient
-      .describeTable(
-        new DescribeTableRequest(TABLE_NAME)
-      )
-      .getTable
-    logger.info(tableDescription.toString)
-    val streamName = tableDescription.getLatestStreamArn
-    streamName
-  }
 }
-class KclSample private (private val worker: Worker) extends LazyLogging {
+class KclSample private (private val worker: Worker) {
 
   def run(): Unit = {
 
-    /** Kickoff the Scheduler. Record processing of the stream of dummy data
-      * will continue indefinitely until an exit is triggered.
-      */
     val schedulerThread = new Thread(worker)
     schedulerThread.setDaemon(true)
     schedulerThread.start()
 
-    /** Allows termination of app by pressing Enter.
-      */
     println("Press enter to shutdown")
     val reader = new BufferedReader(new InputStreamReader(System.in))
     try reader.readLine
     catch {
       case ioex: IOException =>
-        logger.error(
-          "Caught exception while waiting for confirm. Shutting down.",
-          ioex
+        println(
+          s"Caught exception while waiting for confirm. Shutting down. ${ioex}"
         )
     }
 
-    /** Stops consuming data. Finishes processing the current batch of data
-      * already received from Kinesis before shutting down.
-      */
     val gracefulShutdownFuture =
       worker.startGracefulShutdown
-    logger.info("Waiting up to 20 seconds for shutdown to complete.")
+    println("Waiting up to 20 seconds for shutdown to complete.")
     try gracefulShutdownFuture.get(20, TimeUnit.SECONDS)
     catch {
       case _: InterruptedException =>
-        logger.info(
+        println(
           "Interrupted while waiting for graceful shutdown. Continuing."
         )
       case e: ExecutionException =>
-        logger
-          .error("Exception while executing graceful shutdown.", e)
+        println(s"Exception while executing graceful shutdown. ${e}")
       case _: TimeoutException =>
-        logger.error(
+        println(
           "Timeout while waiting for shutdown.  Scheduler may not have exited."
         )
     }
-    logger.info("Completed, shutting down now.")
+    println("Completed, shutting down now.")
   }
 }
