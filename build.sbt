@@ -20,11 +20,11 @@ libraryDependencies ++= Seq(
 
 lazy val setupLocal = taskKey[Unit]("DynamoDB Localを起動し、テーブルを作成する")
 setupLocal := {
-  "docker compose -p kcl2-consumer-scala-example -f local/compose.yml up -d".!
+  "docker compose -p kcl-scala-example -f local/compose.yml up -d".!
   println("running DynamoDB Admin on http://localhost:49001")
 }
 
 lazy val destroyLocal = taskKey[Unit]("DynamoDB Localを終了する")
 destroyLocal := {
-  "docker compose -p kcl2-consumer-scala-example  -f local/compose.yml down".!
+  "docker compose -p kcl-scala-example  -f local/compose.yml down".!
 }
